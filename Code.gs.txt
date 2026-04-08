@@ -1,0 +1,292 @@
+function onOpen() {
+  var ui = SpreadsheetApp.getUi();
+  ui.createMenu('Inventory System Pro')
+    .addItem('Authorise Sheet', 'initSetup')
+    .addItem('Setup Triggers', 'createTriggers')
+    .addSeparator()
+    .addItem('Inventory (Date Range)', 'runInventoryDateRange')
+    .addItem('Inventory (Default 30 Days)', 'runInventoryDefault')
+    .addItem('Latest Closing Stock', 'runLatestStock')
+    .addSeparator()
+    .addItem('Update Reorder Sheet', 'runReorderUpdate')
+    .addItem('Create Indent', 'pushIndentRows')
+    .addSeparator()
+    .addItem('Avg Daily Consumption', 'runAvgConsumption')
+    .addToUi();
+}
+
+function initSetup() {
+  return;
+}
+
+/* ---------------- INVENTORY DATE RANGE ---------------- */
+function runInventoryDateRange() {
+  let ss = SpreadsheetApp.getActiveSpreadsheet();
+  let ims = ss.getSheetByName("IMS");
+  let manual = ss.getSheetByName("In/Out (Manual)");
+  let formDriven = ss.getSheetByName("In/Out (Form)");
+
+  let ui = SpreadsheetApp.getUi();
+
+  let res1 = ui.prompt('Enter Start Date (dd/mm/yyyy)');
+  if (res1.getSelectedButton() !== ui.Button.OK) return;
+  let startDate = parseDateCustom(res1.getResponseText());
+
+  let res2 = ui.prompt('Enter End Date (dd/mm/yyyy)');
+  if (res2.getSelectedButton() !== ui.Button.OK) return;
+  let endDate = parseDateCustom(res2.getResponseText());
+
+  let imsData = ims.getRange(2, 1, ims.getLastRow() - 1, 2).getValues();
+  let combine = manual.getDataRange().getValues().slice(1)
+    .concat(formDriven.getDataRange().getValues().slice(1));
+
+  let startingStocks = imsData.map(r => {
+    let sku = r[0];
+    let stock = 0;
+    combine.forEach(t => {
+      if (t[3]) {
+        let d = parseDateCustom(t[3]);
+        if (t[1] === sku && d < startDate) {
+          stock += (t[2] === 'In' ? 1 : -1) * t[4];
+        }
+      }
+    });
+    return stock;
+  });
+
+  let headers = [];
+  for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+    headers.push(Utilities.formatDate(new Date(d), Session.getScriptTimeZone(), "dd/MM/yyyy"));
+  }
+
+  ims.getRange(1, 13, 1, headers.length).setValues([headers]);
+
+  let finalData = startingStocks.map(s => new Array(headers.length).fill(s));
+
+  combine.forEach(t => {
+    if (t[3]) {
+      let d = parseDateCustom(t[3]);
+      if (d >= startDate && d <= endDate) {
+        let dayIndex = Math.floor((d - startDate) / 86400000);
+        let skuIndex = imsData.findIndex(x => x[0] === t[1]);
+        if (skuIndex >= 0) {
+          let change = (t[2] === 'In' ? 1 : -1) * t[4];
+          for (let i = dayIndex; i < finalData[skuIndex].length; i++) {
+            finalData[skuIndex][i] += change;
+          }
+        }
+      }
+    }
+  });
+
+  let range = ims.getRange(2, 13, finalData.length, headers.length);
+  range.setValues(finalData);
+}
+
+/* ---------------- DEFAULT INVENTORY ---------------- */
+function runInventoryDefault() {
+  let ss = SpreadsheetApp.getActiveSpreadsheet();
+  let ims = ss.getSheetByName("IMS");
+
+  let endDate = new Date();
+  let startDate = new Date();
+  startDate.setDate(endDate.getDate() - 30);
+
+  runInventoryDateRangeAuto(startDate, endDate);
+}
+
+/* helper */
+function runInventoryDateRangeAuto(startDate, endDate) {
+  let ss = SpreadsheetApp.getActiveSpreadsheet();
+  let ims = ss.getSheetByName("IMS");
+  let manual = ss.getSheetByName("In/Out (Manual)");
+  let formDriven = ss.getSheetByName("In/Out (Form)");
+
+  let imsData = ims.getRange(2, 1, ims.getLastRow() - 1, 2).getValues();
+  let combine = manual.getDataRange().getValues().slice(1)
+    .concat(formDriven.getDataRange().getValues().slice(1));
+
+  let startingStocks = imsData.map(r => {
+    let sku = r[0];
+    let stock = 0;
+    combine.forEach(t => {
+      if (t[3]) {
+        let d = parseDateCustom(t[3]);
+        if (t[1] === sku && d < startDate) {
+          stock += (t[2] === 'In' ? 1 : -1) * t[4];
+        }
+      }
+    });
+    return stock;
+  });
+
+  let headers = [];
+  for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+    headers.push(Utilities.formatDate(new Date(d), Session.getScriptTimeZone(), "dd/MM/yyyy"));
+  }
+
+  ims.getRange(1, 13, 1, headers.length).setValues([headers]);
+
+  let finalData = startingStocks.map(s => new Array(headers.length).fill(s));
+
+  combine.forEach(t => {
+    if (t[3]) {
+      let d = parseDateCustom(t[3]);
+      if (d >= startDate && d <= endDate) {
+        let dayIndex = Math.floor((d - startDate) / 86400000);
+        let skuIndex = imsData.findIndex(x => x[0] === t[1]);
+        if (skuIndex >= 0) {
+          let change = (t[2] === 'In' ? 1 : -1) * t[4];
+          for (let i = dayIndex; i < finalData[skuIndex].length; i++) {
+            finalData[skuIndex][i] += change;
+          }
+        }
+      }
+    }
+  });
+
+  ims.getRange(2, 13, finalData.length, headers.length).setValues(finalData);
+}
+
+/* ---------------- LATEST STOCK ---------------- */
+function runLatestStock() {
+  let ss = SpreadsheetApp.getActiveSpreadsheet();
+  let ims = ss.getSheetByName("IMS");
+  let manual = ss.getSheetByName("In/Out (Manual)");
+  let formDriven = ss.getSheetByName("In/Out (Form)");
+
+  let imsData = ims.getRange(2, 1, ims.getLastRow() - 1, 4).getValues();
+  let combine = manual.getDataRange().getValues().slice(1)
+    .concat(formDriven.getDataRange().getValues().slice(1));
+
+  let stocks = imsData.map(r => {
+    let sku = r[0];
+    let total = 0;
+    combine.forEach(t => {
+      if (t[1] === sku) {
+        total += (t[2] === 'In' ? 1 : -1) * t[4];
+      }
+    });
+    return total;
+  });
+
+  ims.getRange(2, 12, stocks.length, 1)
+    .setValues(stocks.map(s => [s]));
+}
+
+/* ---------------- REORDER ---------------- */
+function runReorderUpdate() {
+  let ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName("Reorder Sheet");
+  let manual = ss.getSheetByName("In/Out (Manual)");
+  let form = ss.getSheetByName("In/Out (Form)");
+
+  let data = sheet.getDataRange().getValues();
+  let combine = manual.getDataRange().getValues().slice(1)
+    .concat(form.getDataRange().getValues().slice(1));
+
+  let stocks = data.slice(1).map(r => {
+    let sku = r[0];
+    let stock = 0;
+    combine.forEach(t => {
+      if (t[1] === sku) {
+        stock += (t[2] === 'In' ? 1 : -1) * t[4];
+      }
+    });
+    return stock;
+  });
+
+  sheet.getRange(2, 11, stocks.length, 1).setValues(stocks.map(s => [s]));
+}
+
+/* ---------------- INDENT COPY ---------------- */
+function pushIndentRows() {
+  let ss = SpreadsheetApp.getActiveSpreadsheet();
+  let reorder = ss.getSheetByName("Reorder Sheet");
+  let indent = ss.getSheetByName("Indent Link");
+
+  let data = reorder.getDataRange().getValues();
+  let header = data[0];
+  let idx = header.indexOf("Place Order (y/n)");
+
+  let now = new Date();
+
+  let rows = data.slice(1)
+    .filter(r => r[idx]?.toLowerCase() === "y")
+    .map(r => {
+      r.unshift(now);
+      return r;
+    });
+
+  if (rows.length) {
+    indent.getRange(indent.getLastRow() + 1, 1, rows.length, rows[0].length)
+      .setValues(rows);
+  }
+}
+
+/* ---------------- AVG CONSUMPTION ---------------- */
+function runAvgConsumption() {
+  let ss = SpreadsheetApp.getActiveSpreadsheet();
+  let item = ss.getSheetByName("Item List");
+  let manual = ss.getSheetByName("In/Out (Manual)");
+  let form = ss.getSheetByName("In/Out (Form)");
+
+  let today = new Date();
+  let start = new Date();
+  start.setDate(today.getDate() - 30);
+
+  let combine = manual.getDataRange().getValues().slice(1)
+    .concat(form.getDataRange().getValues().slice(1));
+
+  let map = {};
+
+  combine.forEach(r => {
+    let d = parseDateCustom(r[3]);
+    if (d >= start && d <= today && r[2] === "Out") {
+      map[r[1]] = (map[r[1]] || 0) + r[4];
+    }
+  });
+
+  let items = item.getRange(2, 1, item.getLastRow() - 1, 1).getValues();
+
+  let result = items.map(r => {
+    let sku = r[0];
+    return [map[sku] ? map[sku] / 30 : 0];
+  });
+
+  item.getRange(1, 10).setValue("Avg Consumption");
+  item.getRange(2, 10, result.length, 1).setValues(result);
+}
+
+/* ---------------- DATE PARSER ---------------- */
+function parseDateCustom(str) {
+  if (str instanceof Date) return str;
+  let p = str.split("/");
+  return new Date(p[2], p[1] - 1, p[0]);
+}
+
+/* ---------------- TRIGGERS ---------------- */
+function createTriggers() {
+  ScriptApp.getProjectTriggers().forEach(t => ScriptApp.deleteTrigger(t));
+
+  ScriptApp.newTrigger('runLatestStock').timeBased().everyHours(3).create();
+  ScriptApp.newTrigger('runInventoryDefault').timeBased().everyHours(6).create();
+}
+
+/* ---------------- ON EDIT (ONLY ONE) ---------------- */
+function onEdit(e) {
+  if (!e) return;
+
+  let sh = e.range.getSheet();
+  let row = e.range.getRow();
+  let col = e.range.getColumn();
+
+  if (row === 1) return;
+
+  if (col === 4) {
+    let cell = sh.getRange(row, 1);
+    if (!cell.getValue()) {
+      cell.setValue(new Date());
+    }
+  }
+}
